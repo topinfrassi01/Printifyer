@@ -8,11 +8,43 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import OneHotEncoder
 from skimage import io
 from skimage.exposure import rescale_intensity
+from skimage.morphology import remove_small_holes, binary_closing, binary_dilation, disk
+from skimage.filters import median
+
+
+def post_process_cluster(clustered_image):
+    processed = np.zeros_like(clustered_image)
+    for i in range(clustered_image.shape[-1]):
+        processed[:,:,i] = post_process_cluster_mask(clustered_image[:,:,i].astype(bool))
+
+    return processed
+
+
+def post_process_cluster_mask(mask: np.ndarray) -> np.ndarray:
+    mask = mask.astype(bool)
+
+    mask = median(mask, np.ones((3,3)))
+
+    closing_morph_element = np.ones((5,5), dtype=bool)
+    mask = binary_closing(mask, closing_morph_element)
+
+    holes_closing_morph_element = np.ones((20,20), dtype=bool)
+    mask = remove_small_holes(mask, holes_closing_morph_element)
+
+    return mask
+
+
+def create_outline_from_mask(mask: np.ndarray, outline_thickness=3) -> np.ndarray:
+    mask = mask.astype(bool)
+
+    outline_mask = disk(outline_thickness)
+    dilated = binary_dilation(mask, outline_mask)
+
+    return np.clip(dilated - mask, a_min=0, a_max=1)
 
 
 def cluster_single_image(image: np.ndarray,
                          kmeans:Optional[KMeans]=None,
-                         return_image_as_cluster_indices=True,
                          **kwargs) -> Tuple[np.ndarray, np.ndarray]:
     """
     Groups the intensity values of the image by n clusters using a KMeans algorithm.
@@ -30,20 +62,14 @@ def cluster_single_image(image: np.ndarray,
         raise ValueError(f"Expected image shape is [H,W,C], but found {image.ndim} dimensions.")
 
     if kmeans is None:
-        if n_clusters is None:
-            raise ValueError("If KMeans isn't provided, n_clusters must be.")
-
         kmeans = KMeans(**kwargs)
 
-    if return_image_as_cluster_indices:
-        image = kmeans.fit_predict(image)
-    else:
-        image = kmeans.fit_transform(image)
+    image = kmeans.fit_predict(image)
 
     return image, kmeans.cluster_centers_
 
 
-def one_hot_clusters_in_image(clustered_image: np.ndarray, n_clusters: Optional[int]=None) -> np.ndarray:
+def one_hot_clusters_in_image(clustered_image: np.ndarray, n_clusters: Optional[int]=None) -> Tuple[np.ndarray, OneHotEncoder]:
     """
     Transforms an image of shape [H, W, 1] to an image of shape [H, W, n_clusters].
 
@@ -55,11 +81,12 @@ def one_hot_clusters_in_image(clustered_image: np.ndarray, n_clusters: Optional[
     """
     image_shape = clustered_image.shape
     flattened_image = clustered_image.flatten()
-    
-    categories_names = list(map(str, range(n_clusters if n_clusters is not None else flattened_image.max())))
-    encoded = OneHotEncoder(categories=categories_names).fit_transform(flattened_image)
 
-    return np.reshape(encoded, image_shape)
+    categories_names = list(map(str, range(n_clusters if n_clusters is not None else flattened_image.max())))
+    encoder = OneHotEncoder(categories=categories_names)
+    encoded = encoder.fit_transform(flattened_image)
+
+    return np.reshape(encoded, image_shape), encoder
 
 
 def visualize_clustering(image: np.ndarray,
@@ -74,7 +101,7 @@ def visualize_clustering(image: np.ndarray,
     """
     _, axes = plt.subplots(1, 2)
     axes[0].imshow(image)
-    axes[1].imshow(rescale_intensity(clustered_image, dtype='uint8'))
+    axes[1].imshow(rescale_intensity(clustered_image, out_range='uint8'))
 
     if save_to is None:
         plt.show()
@@ -106,9 +133,15 @@ def main():
 
     image = io.imread(str(image_path))
 
-    clustered_image, _ = cluster_single_image(image, False, **{'n_clusters':arguments.n_clusters, 'verbose': arguments.verbose})
+    clustered_image, _ = cluster_single_image(image, **{'n_clusters':arguments.n_clusters, 'verbose': arguments.verbose})
 
-    if arguments.verbose == 1:
+    one_hot_img, encoder = one_hot_clusters_in_image(clustered_image)
+
+    processed_img = post_process_cluster(one_hot_img)
+
+    clustered_image = encoder.inverse_transform(one_hot_img)
+
+    if arguments.verbose > 0:
         visualize_clustering(image, clustered_image, (image_path.parent / image_path.stem + '_comp_clusters' + image_path.suffix) if arguments.verbose == 2 else None)
 
     if save_path:
