@@ -5,11 +5,12 @@ from typing import Tuple, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.cluster import KMeans
+from sklearn.preprocessing import OneHotEncoder
 from skimage import io
 from skimage.exposure import rescale_intensity
 
-def cluster_image(image:np.ndarray,
-                  n_clusters:int,
+def cluster_image(image: np.ndarray,
+                  n_clusters: int,
                   return_image_as_cluster_indices=True,
                   **kwargs) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -28,18 +29,37 @@ def cluster_image(image:np.ndarray,
         raise ValueError(f"Expected image shape is [H,W,C], but found {image.ndim} dimensions.")
 
     clustering = KMeans(n_clusters, **kwargs)
-    
+
     if return_image_as_cluster_indices:
         image = clustering.fit_predict(image)
     else:
         image = clustering.fit_transform(image)
-    
+
     return image, clustering.cluster_centers_
 
 
-def visualize_clustering(image:np.ndarray,
-                         clustered_image:np.ndarray,
-                         save_to:Optional[Path]=None) -> None:
+def one_hot_clusters_in_image(clustered_image: np.ndarray, n_clusters: Optional[int]=None) -> np.ndarray:
+    """
+    Transforms an image of shape [H, W, 1] to an image of shape [H, W, n_clusters].
+
+    :param image: Array of shape [H, W, 1] where an element's value is a cluster ID
+    :param n_clusters: Optional parameter used only if some cluster values do not exist in the image.
+                       This might happen if clusters trained on an image are used on another image.
+                       If the parameter is None, we assume n_clusters = clustered_image.max()
+    :return: The one hot encoded image of shape [H, W, n_clusters]
+    """
+    image_shape = clustered_image.shape
+    flattened_image = clustered_image.flatten()
+    
+    categories_names = list(map(str, range(n_clusters if n_clusters is not None else flattened_image.max())))
+    encoded = OneHotEncoder(categories=categories_names).fit_transform(flattened_image)
+
+    return np.reshape(encoded, image_shape)
+
+
+def visualize_clustering(image: np.ndarray,
+                         clustered_image: np.ndarray,
+                         save_to: Optional[Path]=None) -> None:
     """
     Visualize the clustering applied to an image.
 
