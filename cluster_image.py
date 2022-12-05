@@ -9,17 +9,18 @@ from sklearn.preprocessing import OneHotEncoder
 from skimage import io
 from skimage.exposure import rescale_intensity
 
-def cluster_image(image: np.ndarray,
-                  n_clusters: int,
-                  return_image_as_cluster_indices=True,
-                  **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+
+def cluster_single_image(image: np.ndarray,
+                         kmeans:Optional[KMeans]=None,
+                         return_image_as_cluster_indices=True,
+                         **kwargs) -> Tuple[np.ndarray, np.ndarray]:
     """
     Groups the intensity values of the image by n clusters using a KMeans algorithm.
 
     :param image: Image to cluster. Can be in any color mode, must be of shape [H,W,C] or [H,W] in case of a grayscale image.
-    :param n_clusters: Number of clusters to use.
+    :param kmeans: Trained KMeans classifier. If None, one will be trained from the image.
     :param return_image_as_cluster_indices: If True, will return the image with the cluster indices instead of the cluster values.
-    :param **kwargs: Parameters applied to the KMeans algorithm.
+    :param **kwargs: Parameters applied to the KMeans algorithm if kmeans is None.
     :return: The clustered image and the clusters created by the KMeans argument
     :raises: ValueError if image doesn't have the expected shape.
     """
@@ -28,14 +29,18 @@ def cluster_image(image: np.ndarray,
     if image.ndim != 3:
         raise ValueError(f"Expected image shape is [H,W,C], but found {image.ndim} dimensions.")
 
-    clustering = KMeans(n_clusters, **kwargs)
+    if kmeans is None:
+        if n_clusters is None:
+            raise ValueError("If KMeans isn't provided, n_clusters must be.")
+
+        kmeans = KMeans(**kwargs)
 
     if return_image_as_cluster_indices:
-        image = clustering.fit_predict(image)
+        image = kmeans.fit_predict(image)
     else:
-        image = clustering.fit_transform(image)
+        image = kmeans.fit_transform(image)
 
-    return image, clustering.cluster_centers_
+    return image, kmeans.cluster_centers_
 
 
 def one_hot_clusters_in_image(clustered_image: np.ndarray, n_clusters: Optional[int]=None) -> np.ndarray:
@@ -101,7 +106,7 @@ def main():
 
     image = io.imread(str(image_path))
 
-    clustered_image, _ = cluster_image(image, arguments.n_clusters, False, **{'verbose': arguments.verbose})
+    clustered_image, _ = cluster_single_image(image, False, **{'n_clusters':arguments.n_clusters, 'verbose': arguments.verbose})
 
     if arguments.verbose == 1:
         visualize_clustering(image, clustered_image, (image_path.parent / image_path.stem + '_comp_clusters' + image_path.suffix) if arguments.verbose == 2 else None)
