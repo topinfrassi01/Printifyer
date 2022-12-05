@@ -28,8 +28,7 @@ def post_process_cluster_mask(mask: np.ndarray) -> np.ndarray:
     closing_morph_element = np.ones((5,5), dtype=bool)
     mask = binary_closing(mask, closing_morph_element)
 
-    holes_closing_morph_element = np.ones((20,20), dtype=bool)
-    mask = remove_small_holes(mask, holes_closing_morph_element)
+    mask = remove_small_holes(mask, area_threshold=20)
 
     return mask
 
@@ -61,10 +60,15 @@ def cluster_single_image(image: np.ndarray,
     if image.ndim != 3:
         raise ValueError(f"Expected image shape is [H,W,C], but found {image.ndim} dimensions.")
 
+    image_shape = image.shape
+    image = np.reshape(image, (-1, 3))
+
     if kmeans is None:
-        kmeans = KMeans(**kwargs)
+        kmeans = KMeans(**kwargs, n_init=1)
 
     image = kmeans.fit_predict(image)
+
+    image = np.reshape(image, tuple(image_shape[0:-1]))
 
     return image, kmeans.cluster_centers_
 
@@ -80,13 +84,26 @@ def one_hot_clusters_in_image(clustered_image: np.ndarray, n_clusters: Optional[
     :return: The one hot encoded image of shape [H, W, n_clusters]
     """
     image_shape = clustered_image.shape
-    flattened_image = clustered_image.flatten()
+    flattened_image = clustered_image.flatten().reshape(-1, 1)
 
-    categories_names = list(map(str, range(n_clusters if n_clusters is not None else flattened_image.max())))
-    encoder = OneHotEncoder(categories=categories_names)
+    categories_names = list(map(str, range(n_clusters if n_clusters is not None else (flattened_image.max() + 1))))
+
+    encoder = OneHotEncoder(sparse=False, categories=[categories_names])
     encoded = encoder.fit_transform(flattened_image)
 
-    return np.reshape(encoded, image_shape), encoder
+    return np.reshape(encoded, (image_shape[0], image_shape[1], -1))
+
+
+def restack_one_hot_encoded_image(one_hot_image:np.ndarray):
+    densities = one_hot_image.sum(axis=(0,1))
+    indices_order = reversed(list(np.argsort(densities)))
+
+    restacked_image = np.zeros((one_hot_image.shape[0], one_hot_image.shape[1]))
+
+    for i in indices_order:
+        restacked_image = np.where(one_hot_image[:,:,i] == 0, restacked_image, i)
+
+    return restacked_image
 
 
 def visualize_clustering(image: np.ndarray,
@@ -135,14 +152,14 @@ def main():
 
     clustered_image, _ = cluster_single_image(image, **{'n_clusters':arguments.n_clusters, 'verbose': arguments.verbose})
 
-    one_hot_img, encoder = one_hot_clusters_in_image(clustered_image)
+    one_hot_img = one_hot_clusters_in_image(clustered_image)
 
     processed_img = post_process_cluster(one_hot_img)
 
-    clustered_image = encoder.inverse_transform(one_hot_img)
+    clustered_image = restack_one_hot_encoded_image(processed_img)
 
     if arguments.verbose > 0:
-        visualize_clustering(image, clustered_image, (image_path.parent / image_path.stem + '_comp_clusters' + image_path.suffix) if arguments.verbose == 2 else None)
+        visualize_clustering(image, clustered_image, (image_path.parent / (image_path.stem + '_comp_clusters' + image_path.suffix)) if arguments.verbose == 2 else None)
 
     if save_path:
         io.imsave(save_path / (image_path.stem + '_clustered' + image_path.suffix), clustered_image)
